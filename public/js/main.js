@@ -11,6 +11,7 @@
   const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
   const finePointer = matchMedia("(hover: hover) and (pointer: fine)").matches;
   const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const isMobile = window.innerWidth <= 860 || !finePointer;
   const store = {
     get(k, d) { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch { return d; } },
     set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
@@ -34,7 +35,8 @@
     if (video.dataset.loaded) return;
     video.dataset.loaded = "1";
     const d = video.dataset;
-    video.src = (screenPx > 2600 && d.src4k) || (screenPx > 1400 && d.src2k) || d.src;
+    // On mobile screens, never load heavy 4K/2K streams to ensure 60fps playback
+    video.src = isMobile ? d.src : ((screenPx > 2600 && d.src4k) || (screenPx > 1600 && d.src2k) || d.src);
     video.load();
   }
   const sceneVideos = $$(".scene-video");
@@ -129,14 +131,16 @@
      SMOOTH SCROLL
      ===================================================== */
   let lenis = null;
-  if (!reduceMotion && typeof Lenis !== "undefined") {
-    lenis = window.lenis = new Lenis({ duration: 1.25, smoothWheel: true });
+  if (!reduceMotion && typeof Lenis !== "undefined" && finePointer && !isMobile) {
+    lenis = window.lenis = new Lenis({ duration: 1.15, smoothWheel: true });
     lenis.on("scroll", ScrollTrigger.update);
     gsap.ticker.add((t) => lenis.raf(t * 1000));
-    gsap.ticker.lagSmoothing(0);
+    gsap.ticker.lagSmoothing(500, 33);
     if (loader.isConnected) lenis.stop();
+  } else {
+    gsap.ticker.lagSmoothing(500, 33);
   }
-  const scrollToY = (y) => (lenis ? lenis.scrollTo(y, { duration: 1.6 }) : scrollTo({ top: y, behavior: "smooth" }));
+  const scrollToY = (y) => (lenis ? lenis.scrollTo(y, { duration: 1.4 }) : scrollTo({ top: y, behavior: "smooth" }));
   $$('a[href^="#"]').forEach((a) =>
     a.addEventListener("click", (e) => {
       const el = $(a.getAttribute("href"));
@@ -202,7 +206,11 @@
   const cRing = $(".c-ring", cursor);
   const cDot = $(".c-dot", cursor);
   const ring = { x: mouse.x, y: mouse.y };
-  if (finePointer) {
+  if (finePointer && cursor) {
+    addEventListener("pointermove", () => cursor.classList.remove("is-hidden"), { passive: true });
+    document.addEventListener("mouseleave", () => cursor.classList.add("is-hidden"));
+    document.addEventListener("mouseenter", () => cursor.classList.remove("is-hidden"));
+
     gsap.ticker.add(() => {
       ring.x = lerp(ring.x, mouse.x, .18); ring.y = lerp(ring.y, mouse.y, .18);
       cRing.style.transform = `translate(${ring.x}px, ${ring.y}px) translate(-50%,-50%)`;
@@ -221,7 +229,9 @@
 
   (function bubbleTrail() {
     if (!finePointer || reduceMotion) return;
-    const c = $("#bubbleTrail"), ctx = c.getContext("2d");
+    const c = $("#bubbleTrail");
+    if (!c) return;
+    const ctx = c.getContext("2d");
     const dpr = Math.min(devicePixelRatio, 2);
     let parts = [], last = { x: 0, y: 0 };
     const resize = () => { c.width = innerWidth * dpr; c.height = innerHeight * dpr; };
@@ -234,6 +244,7 @@
       }
     }, { passive: true });
     gsap.ticker.add(() => {
+      if (!parts.length) return; // skip when idle to save GPU frames!
       ctx.clearRect(0, 0, c.width, c.height);
       parts = parts.filter((p) => p.life > 0);
       for (const p of parts) {
@@ -262,7 +273,7 @@
   }
 
   /* =====================================================
-     NAV
+     NAV & MOBILE MENU
      ===================================================== */
   const nav = $(".nav");
   let lastY = 0;
@@ -272,6 +283,39 @@
     nav.classList.toggle("is-solid", y > 60);
     lastY = y;
   }, { passive: true });
+
+  const menuBtn = $("#menuBtn");
+  const mobileMenu = $("#mobileMenu");
+  const menuCloseBtn = $("#menuCloseBtn");
+  const menuBackdrop = $("#menuBackdrop");
+
+  const openMobileMenu = () => {
+    mobileMenu?.classList.add("is-open");
+    menuBtn?.classList.add("is-active");
+    mobileMenu?.setAttribute("aria-hidden", "false");
+    menuBtn?.setAttribute("aria-expanded", "true");
+  };
+  const closeMobileMenu = () => {
+    mobileMenu?.classList.remove("is-open");
+    menuBtn?.classList.remove("is-active");
+    mobileMenu?.setAttribute("aria-hidden", "true");
+    menuBtn?.setAttribute("aria-expanded", "false");
+  };
+
+  menuBtn?.addEventListener("click", () => {
+    mobileMenu?.classList.contains("is-open") ? closeMobileMenu() : openMobileMenu();
+  });
+  menuCloseBtn?.addEventListener("click", closeMobileMenu);
+  menuBackdrop?.addEventListener("click", closeMobileMenu);
+  $$(".mobile-nav-links a").forEach((a) => {
+    a.addEventListener("click", (e) => {
+      closeMobileMenu();
+      const el = $(a.getAttribute("href"));
+      if (!el) return;
+      e.preventDefault();
+      setTimeout(() => scrollToY(el.getBoundingClientRect().top + scrollY), 100);
+    });
+  });
 
   /* =====================================================
      IMMERSIVE SCENES
@@ -391,6 +435,7 @@
     card.setAttribute("aria-hidden", "true");
     allHotspots.forEach((o) => { o.held = false; o.el.classList.remove("is-open"); });
   }
+  $("#specClose")?.addEventListener("click", (e) => { e.stopPropagation(); closeCard(); });
   card.addEventListener("pointerenter", () => clearTimeout(closeTimer));
   card.addEventListener("pointerleave", (e) => { if (e.pointerType === "mouse") scheduleClose(); });
   $(".spec-add", card).addEventListener("click", (e) => { addToCart(card.dataset.product, 1, e.currentTarget); });
@@ -457,7 +502,7 @@
   for (let i = 1; i < scenes.length; i++) {
     const prev = scenes[i - 1], next = scenes[i];
     sceneTl
-      .fromTo($(".scene-media", prev), { scale: 1, filter: "blur(0px) brightness(1)" }, { scale: 1.25, filter: "blur(6px) brightness(0.6)", duration: 1, immediateRender: false }, `t${i}`)
+      .fromTo($(".scene-media", prev), { scale: 1, opacity: 1 }, { scale: 1.15, opacity: 0.25, duration: 1, immediateRender: false }, `t${i}`)
       .to($(".scene-copy", prev), { y: -80, opacity: 0, duration: .5 }, `t${i}`)
       .to($(".hotspots", prev), { opacity: 0, duration: .35 }, `t${i}`)
       .fromTo($(".hotspots", next), { opacity: 0 }, { opacity: 1, duration: .4 }, `t${i}+=.6`)
@@ -646,6 +691,10 @@
   function movePill() {
     const b = $("button.is-active", filtersEl); if (!b) return;
     pill.style.left = b.offsetLeft + "px"; pill.style.width = b.offsetWidth + "px";
+    if (filtersEl.scrollWidth > filtersEl.clientWidth) {
+      const targetLeft = b.offsetLeft - (filtersEl.clientWidth / 2) + (b.offsetWidth / 2);
+      filtersEl.scrollTo({ left: Math.max(0, targetLeft), behavior: "smooth" });
+    }
   }
   function setFilter(id) {
     $$("button", filtersEl).forEach((b) => b.classList.toggle("is-active", b.dataset.filter === id));
@@ -809,6 +858,8 @@
   gsap.ticker.add(() => {
     const W = fishLayer.clientWidth, H = fishLayer.clientHeight;
     if (!W) return;
+    const r = tankEl.getBoundingClientRect();
+    if (r.bottom < 0 || r.top > innerHeight) return;
     swimmers.forEach((s) => {
       const dx = s.tx - s.x, dy = s.ty - s.y;
       if (Math.hypot(dx, dy) < 2) { s.tx = Math.random() * 84 + 6; s.ty = s.id === "shrimp" ? 78 + Math.random() * 6 : Math.random() * 66 + 8; }
